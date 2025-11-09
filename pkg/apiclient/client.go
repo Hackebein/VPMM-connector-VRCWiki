@@ -1,7 +1,7 @@
 package apiclient
 
 //go:generate sh -c "curl -fsSL https://vpmm.dev/openapi-3.0.json -o ./openapi.json"
-//go:generate sh -c "go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen --config=./oapi.config.yaml ./openapi.json > ./client.gen.go"
+//go:generate sh -c "oapi-codegen --config=./oapi.config.yaml ./openapi.json > ./client.gen.go"
 
 import (
 	"context"
