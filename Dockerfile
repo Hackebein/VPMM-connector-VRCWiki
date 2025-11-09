@@ -5,7 +5,7 @@ RUN apk add --no-cache curl git ca-certificates build-base
 WORKDIR /src
 
 # Pre-install generator tool
-RUN go install github.com/deepmap/oapi-codegen/v2/cmd/oapi-codegen@v2.5.1
+RUN go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.5.1
 
 # Copy sources
 COPY . .
