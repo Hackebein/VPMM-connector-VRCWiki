@@ -1,0 +1,8 @@
+package: apiclient
+generate:
+  models: true
+  client: true
+compatibility:
+  # Maintain compatibility with recent Go versions
+  always-prefix-enum-values: true
+

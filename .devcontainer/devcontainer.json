@@ -1,0 +1,30 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/go
+{
+	"name": "Development Container",
+	"image": "mcr.microsoft.com/devcontainers/go:1.25-bookworm",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"golang.go",
+				"github.vscode-github-actions",
+				"ms-azuretools.vscode-containers",
+				"ms-azuretools.vscode-docker"
+			]
+		}
+	},
+	"features": {
+		"ghcr.io/devcontainers/features/github-cli:1": {
+			"version": "latest"
+		},
+		"ghcr.io/devcontainers/features/sshd:1": {
+			"version": "latest"
+		},
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {
+			"version": "latest"
+		}
+	},
+	"otherPortsAttributes": {
+		"onAutoForward": "silent"
+	}
+}
