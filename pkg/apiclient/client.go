@@ -22,7 +22,7 @@ type SSEHandlers struct {
 }
 
 // ListenSSE connects to the SSE endpoint and dispatches events to provided handlers.
-func ListenSSE(ctx context.Context, sseURL string, httpClient *http.Client, h SSEHandlers) error {
+func ListenSSE(ctx context.Context, sseURL string, httpClient *http.Client, lastID *string, h SSEHandlers) error {
 	client := sse.NewClient(sseURL)
 	if httpClient != nil {
 		// r3labs/sse v2 uses Connection for custom transports/timeouts
@@ -33,9 +33,27 @@ func ListenSSE(ctx context.Context, sseURL string, httpClient *http.Client, h SS
 		client.Headers = make(map[string]string)
 	}
 	client.Headers["Accept"] = "text/event-stream"
+	if lastID != nil && *lastID != "" {
+		client.Headers["Last-Event-ID"] = *lastID
+	}
 
 	// Use context-aware subscription; empty channel subscribes to default stream
 	return client.SubscribeWithContext(ctx, "", func(msg *sse.Event) {
+		// update lastID if available on each domain event
+		if lastID != nil {
+			// prefer SSE ID if present
+			if len(msg.ID) > 0 {
+				*lastID = string(msg.ID)
+			} else {
+				var idWrap struct {
+					ID string `json:"id"`
+				}
+				_ = json.Unmarshal(msg.Data, &idWrap)
+				if idWrap.ID != "" {
+					*lastID = idWrap.ID
+				}
+			}
+		}
 		name := string(msg.Event)
 		if len(msg.Data) == 0 {
 			return

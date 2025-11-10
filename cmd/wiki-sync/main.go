@@ -79,6 +79,7 @@ func main() {
 
 	// SSE loop with backoff
 	events := make(chan sseEvent, 8)
+	var lastID string
 	go func() {
 		defer close(events)
 		backoff := time.Second
@@ -86,7 +87,7 @@ func main() {
 			if ctx.Err() != nil {
 				return
 			}
-			if err := apiclient.ListenSSE(ctx, sseURL, httpClient, apiclient.SSEHandlers{
+			if err := apiclient.ListenSSE(ctx, sseURL, httpClient, &lastID, apiclient.SSEHandlers{
 				OnPackageAdded: func(event apiclient.PackageAddedEvent) {
 					events <- sseEvent{Event: "package.added", Data: event.Identifier.Name}
 				},
