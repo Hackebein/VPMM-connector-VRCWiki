@@ -586,24 +586,24 @@ func (c *MediaWikiClient) ProcessSpecificVersionPage(packageName, versionTag str
 	if !exists {
 		return nil
 	}
-	v, err := semver.StrictNewVersion(strings.TrimSpace(versionTag))
+	// read version from the page content, allowing free-form page names
+	content, err := c.getPageContent(versionPageTitle)
 	if err != nil {
-		// semver-only: ignore non-semver tags
+		return fmt.Errorf("read content from %s: %w", versionPageTitle, err)
+	}
+	v, err := semver.StrictNewVersion(strings.TrimSpace(content))
+	if err != nil {
 		if c.logger != nil {
-			c.logger.Warn("non-semver version tag ignored", "package", packageName, "tag", versionTag)
+			c.logger.Warn("non-semver version content on page", "package", packageName, "page", versionPageTitle, "content", strings.TrimSpace(content))
 		}
 		return nil
 	}
-	// if known, update version page and subpages
+	// if known, update subpages for this version (main page content is the source of truth)
 	if pkgVersion, ok := knownVersions[v.String()]; ok {
-		if err := c.EditPage(versionPageTitle, sanitizeForWiki(v.String()), true); err != nil {
-			return fmt.Errorf("update version page %s: %w", versionPageTitle, err)
-		}
 		return c.updateVersionSubpages(packageName, versionTag, pkgVersion)
 	}
-	// unknown but valid semver: write the version only
-	if err := c.EditPage(versionPageTitle, sanitizeForWiki(v.String()), true); err != nil {
-		return fmt.Errorf("update version page %s: %w", versionPageTitle, err)
+	if c.logger != nil {
+		c.logger.Info("version from page content not found in known versions", "package", packageName, "version", v.String(), "page", versionPageTitle)
 	}
 	return nil
 }
