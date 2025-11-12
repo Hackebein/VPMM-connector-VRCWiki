@@ -330,30 +330,6 @@ func (c *MediaWikiClient) EditPage(title, text string, bot bool) error {
 			return fmt.Errorf("ensure output dir: %w", err)
 		}
 		path := c.pageFilePath(title)
-		// For the Version summary page, also produce a unified diff alongside the .md file.
-		if title == VersionSummaryPageTitle {
-			old, err := c.getPageContent(title)
-			if err != nil {
-				return fmt.Errorf("read old content: %w", err)
-			}
-			ud := difflib.UnifiedDiff{
-				A:        difflib.SplitLines(old),
-				B:        difflib.SplitLines(text),
-				FromFile: "a/" + sanitizeFilename(title),
-				ToFile:   "b/" + sanitizeFilename(title),
-				Context:  3,
-			}
-			diffStr, err := difflib.GetUnifiedDiffString(ud)
-			if err != nil {
-				return fmt.Errorf("create diff: %w", err)
-			}
-			base := sanitizeFilename(title)
-			base = strings.TrimSuffix(base, ".md")
-			diffPath := filepath.Join(c.outputDir, base+".diff")
-			if err := os.WriteFile(diffPath, []byte(diffStr), 0o644); err != nil {
-				return fmt.Errorf("write diff file: %w", err)
-			}
-		}
 		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 			return fmt.Errorf("write file: %w", err)
 		}
