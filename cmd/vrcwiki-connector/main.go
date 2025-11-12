@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hackebein/vpmm/apps/wiki-sync/pkg/apiclient"
-	mw "github.com/hackebein/vpmm/apps/wiki-sync/pkg/mediawiki"
+	"github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/apiclient"
+	mw "github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/mediawiki"
 )
 
 func getenv(key, def string) string {
@@ -29,7 +29,7 @@ type sseEvent struct {
 }
 
 func main() {
-	logger := log.New(os.Stdout, "wiki-sync ", log.LstdFlags)
+	logger := log.New(os.Stdout, "vrcwiki-connector ", log.LstdFlags)
 
 	vpmmBaseURL := getenv("VPMM_API_BASE_URL", "https://vpmm.dev")
 	sseURL := strings.TrimRight(vpmmBaseURL, "/") + "/sse"

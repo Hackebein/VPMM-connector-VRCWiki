@@ -29,4 +29,4 @@ until curl -fsS "${OPENAPI_URL:-https://vpmm.dev/openapi-3.0.json}" -o /dev/null
 # Allow dependent services a brief moment to be ready
 sleep 3
 
-exec /go/bin/reflex -R "^vendor/" -r "\\.go$" -s -- go run ./cmd/wiki-sync
+exec /go/bin/reflex -R "^vendor/" -r "\\.go$" -s -- go run ./cmd/vrcwiki-connector

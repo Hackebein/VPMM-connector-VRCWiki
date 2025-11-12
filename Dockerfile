@@ -14,11 +14,11 @@ COPY . .
 RUN go generate ./pkg/apiclient
 
 # Build binary
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/wiki-sync ./cmd/wiki-sync
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/vrcwiki-connector ./cmd/vrcwiki-connector
 
 FROM gcr.io/distroless/base-debian12:nonroot
 WORKDIR /app
-COPY --from=build /out/wiki-sync /app/wiki-sync
+COPY --from=build /out/vrcwiki-connector /app/vrcwiki-connector
 USER nonroot:nonroot
-ENTRYPOINT ["/app/wiki-sync"]
+ENTRYPOINT ["/app/vrcwiki-connector"]
 

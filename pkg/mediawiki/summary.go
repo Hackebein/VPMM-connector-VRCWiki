@@ -6,8 +6,11 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	apiclient "github.com/hackebein/vpmm/apps/wiki-sync/pkg/apiclient"
+	apiclient "github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/apiclient"
 )
+
+// VersionSummaryPageTitle is the MediaWiki title of the version summary page.
+const VersionSummaryPageTitle = "Template:VPM/Version summary"
 
 // PackageVersionSummary aggregates latest, stable, unstable and known wiki versions for a package.
 type PackageVersionSummary struct {
