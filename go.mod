@@ -5,7 +5,6 @@ go 1.25.2
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/oapi-codegen/runtime v1.1.2
-	github.com/pmezard/go-difflib v1.0.0
 	github.com/r3labs/sse/v2 v2.10.0
 )
 
