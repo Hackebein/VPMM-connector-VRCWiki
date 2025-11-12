@@ -16,7 +16,6 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	apiclient "github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/apiclient"
-	"github.com/pmezard/go-difflib/difflib"
 )
 
 type WikiConfig struct {
