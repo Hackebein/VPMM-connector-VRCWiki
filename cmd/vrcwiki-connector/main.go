@@ -44,6 +44,7 @@ func main() {
 	defer stop()
 
 	httpClient := &http.Client{Timeout: 60 * time.Second}
+	sseClient := &http.Client{Timeout: 0 * time.Second}
 
 	wikiClient, err := mw.NewMediaWikiClient(mw.WikiConfig{
 		URL:       wikiAPI,
@@ -87,7 +88,7 @@ func main() {
 			if ctx.Err() != nil {
 				return
 			}
-			if err := apiclient.ListenSSE(ctx, sseURL, httpClient, &lastID, apiclient.SSEHandlers{
+			if err := apiclient.ListenSSE(ctx, sseURL, sseClient, &lastID, apiclient.SSEHandlers{
 				OnPackageAdded: func(event apiclient.PackageAddedEvent) {
 					events <- sseEvent{Event: "package.added", Data: event.Identifier.Name}
 				},

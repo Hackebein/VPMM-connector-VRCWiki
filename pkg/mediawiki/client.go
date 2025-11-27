@@ -33,6 +33,9 @@ type MediaWikiClient struct {
 	tokens     map[string]string
 	mu         sync.RWMutex
 
+	username string
+	password string
+
 	// optional extra header
 	headerName  string
 	headerValue string
@@ -71,13 +74,15 @@ func NewMediaWikiClient(config WikiConfig, httpClient *http.Client) (*MediaWikiC
 		httpClient:  httpClient,
 		userAgent:   getUserAgent(),
 		tokens:      make(map[string]string),
+		username:    strings.TrimSpace(config.Username),
+		password:    strings.TrimSpace(config.Password),
 		headerName:  strings.TrimSpace(config.Header),
 		headerValue: strings.TrimSpace(config.HeaderVal),
 		logger:      logger,
 	}
 
 	// enable offline mode when no username/password provided
-	if strings.TrimSpace(config.Username) == "" && strings.TrimSpace(config.Password) == "" {
+	if c.username == "" && c.password == "" {
 		c.offline = true
 		c.outputDir = "./wiki-output"
 		if c.logger != nil {
@@ -85,8 +90,8 @@ func NewMediaWikiClient(config WikiConfig, httpClient *http.Client) (*MediaWikiC
 		}
 	}
 
-	if config.Username != "" && config.Password != "" {
-		if err := c.Login(config.Username, config.Password); err != nil {
+	if c.username != "" && c.password != "" {
+		if err := c.Login(); err != nil {
 			return nil, err
 		}
 	}
@@ -287,15 +292,62 @@ func (c *MediaWikiClient) getToken(tokenType string) (string, error) {
 	return token, nil
 }
 
-func (c *MediaWikiClient) Login(username, password string) error {
+func (c *MediaWikiClient) invalidateToken(tokenType string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.tokens, tokenType)
+}
+
+func isBadTokenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "badtoken")
+}
+
+func (c *MediaWikiClient) reloginIfPossible() error {
+	if c.offline || c.username == "" || c.password == "" {
+		return nil
+	}
+	c.invalidateToken("login")
+	if err := c.Login(); err != nil {
+		return fmt.Errorf("re-login after badtoken: %w", err)
+	}
+	return nil
+}
+
+func (c *MediaWikiClient) withCSRFWriteRetry(op func(csrf string) error) error {
+	const maxAttempts = 2
+	var lastErr error
+	for range maxAttempts {
+		csrf, err := c.getToken("csrf")
+		if err != nil {
+			return fmt.Errorf("get csrf: %w", err)
+		}
+		lastErr = op(csrf)
+		if lastErr == nil {
+			return nil
+		}
+		if !isBadTokenError(lastErr) {
+			return lastErr
+		}
+		c.invalidateToken("csrf")
+		if err := c.reloginIfPossible(); err != nil {
+			return err
+		}
+	}
+	return lastErr
+}
+
+func (c *MediaWikiClient) Login() error {
 	loginToken, err := c.getToken("login")
 	if err != nil {
 		return fmt.Errorf("get login token: %w", err)
 	}
 	params := map[string]string{
 		"action":     "login",
-		"lgname":     username,
-		"lgpassword": password,
+		"lgname":     c.username,
+		"lgpassword": c.password,
 		"lgtoken":    loginToken,
 	}
 	result, err := c.apiRequest(params)
@@ -337,35 +389,33 @@ func (c *MediaWikiClient) EditPage(title, text string, bot bool) error {
 		}
 		return nil
 	}
-	csrf, err := c.getToken("csrf")
-	if err != nil {
-		return fmt.Errorf("get csrf: %w", err)
-	}
-	params := map[string]string{
-		"action":  "edit",
-		"title":   title,
-		"text":    text,
-		"summary": fmt.Sprintf("Updated by VPMM: %s", text),
-		"token":   csrf,
-	}
-	if bot {
-		params["bot"] = "true"
-	}
-	result, err := c.apiRequest(params)
-	if err != nil {
-		return fmt.Errorf("edit request failed: %w", err)
-	}
-	edit, ok := result["edit"].(map[string]any)
-	if !ok {
-		return fmt.Errorf("invalid edit response structure")
-	}
-	if r, _ := edit["result"].(string); r != "Success" {
-		return fmt.Errorf("edit failed: %s", r)
-	}
-	if c.logger != nil {
-		c.logger.Info("wiki edit success", "title", title, "bot", bot)
-	}
-	return nil
+	return c.withCSRFWriteRetry(func(csrf string) error {
+		params := map[string]string{
+			"action":  "edit",
+			"title":   title,
+			"text":    text,
+			"summary": fmt.Sprintf("Updated by VPMM: %s", text),
+			"token":   csrf,
+		}
+		if bot {
+			params["bot"] = "true"
+		}
+		result, err := c.apiRequest(params)
+		if err != nil {
+			return fmt.Errorf("edit request failed: %w", err)
+		}
+		edit, ok := result["edit"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("invalid edit response structure")
+		}
+		if r, _ := edit["result"].(string); r != "Success" {
+			return fmt.Errorf("edit failed: %s", r)
+		}
+		if c.logger != nil {
+			c.logger.Info("wiki edit success", "title", title, "bot", bot)
+		}
+		return nil
+	})
 }
 
 func (c *MediaWikiClient) getPageContent(title string) (string, error) {
@@ -432,29 +482,27 @@ func (c *MediaWikiClient) DeletePage(title string, reason string) error {
 		}
 		return nil
 	}
-	csrf, err := c.getToken("csrf")
-	if err != nil {
-		return fmt.Errorf("get csrf: %w", err)
-	}
-	params := map[string]string{
-		"action": "delete",
-		"title":  title,
-		"token":  csrf,
-	}
-	if strings.TrimSpace(reason) != "" {
-		params["reason"] = reason
-	}
-	result, err := c.apiRequest(params)
-	if err != nil {
-		return fmt.Errorf("delete request failed: %w", err)
-	}
-	if _, ok := result["delete"].(map[string]any); !ok {
-		return fmt.Errorf("invalid delete response structure")
-	}
-	if c.logger != nil {
-		c.logger.Info("wiki delete success", "title", title)
-	}
-	return nil
+	return c.withCSRFWriteRetry(func(csrf string) error {
+		params := map[string]string{
+			"action": "delete",
+			"title":  title,
+			"token":  csrf,
+		}
+		if reason != "" {
+			params["reason"] = reason
+		}
+		result, err := c.apiRequest(params)
+		if err != nil {
+			return fmt.Errorf("delete request failed: %w", err)
+		}
+		if _, ok := result["delete"].(map[string]any); !ok {
+			return fmt.Errorf("invalid delete response structure")
+		}
+		if c.logger != nil {
+			c.logger.Info("wiki delete success", "title", title)
+		}
+		return nil
+	})
 }
 
 // pageExists returns true if the given page exists on the wiki.
