@@ -159,16 +159,12 @@ func (c *MediaWikiClient) UpdateSinglePackage(pkg apiclient.Package) error {
 		}
 		return *p
 	}
-	var urls []string
-	if pkg.Urls != nil {
-		urls = *pkg.Urls
-	}
 	pagesToUpdate := map[string]string{
 		fmt.Sprintf("Template:VPM/%s/Latest_version", packageName):             sanitizeForWiki(pkg.Version),
 		fmt.Sprintf("Template:VPM/%s/Latest_version/Description", packageName): sanitizeForWiki(str(pkg.Description)),
 		fmt.Sprintf("Template:VPM/%s/Latest_version/DisplayName", packageName): sanitizeForWiki(pkg.DisplayName),
 		fmt.Sprintf("Template:VPM/%s/Latest_version/License", packageName):     sanitizeForWiki(str(pkg.License)),
-		fmt.Sprintf("Template:VPM/%s/Latest_version/VPM", packageName):         sanitizeForWiki(firstURL(urls)),
+		fmt.Sprintf("Template:VPM/%s/Latest_version/VPM", packageName):         sanitizeForWiki(firstListingURL(pkg.Urls)),
 	}
 	if pkg.Author.Name != nil && *pkg.Author.Name != "" {
 		authors := strings.Split(*pkg.Author.Name, ",")
@@ -203,11 +199,16 @@ func (c *MediaWikiClient) UpdateSinglePackage(pkg apiclient.Package) error {
 	return nil
 }
 
-func firstURL(urls []string) string {
-	if len(urls) == 0 {
+func firstListingURL(urls *[]apiclient.PackageURL) string {
+	if urls == nil {
 		return ""
 	}
-	return urls[0]
+	for _, entry := range *urls {
+		if strings.TrimSpace(entry.Url) != "" {
+			return entry.Url
+		}
+	}
+	return ""
 }
 
 func (c *MediaWikiClient) apiRequest(params map[string]string) (map[string]any, error) {
@@ -375,8 +376,28 @@ func (c *MediaWikiClient) Login() error {
 }
 
 func (c *MediaWikiClient) EditPage(title, text string, bot bool) error {
+	trimmedNew := strings.TrimSpace(text)
+	currentContent, err := c.getPageContent(title)
+	var summary string
+	if err != nil {
+		if !strings.Contains(err.Error(), "page does not exist") {
+			return fmt.Errorf("get current content for page %s: %w", title, err)
+		}
+		currentContent = ""
+		summary = fmt.Sprintf("Set: `%s`", text)
+	} else {
+		trimmedCurrent := strings.TrimSpace(currentContent)
+		if trimmedCurrent == trimmedNew {
+			return nil
+		}
+		if trimmedCurrent == "" {
+			summary = fmt.Sprintf("Set: `%s`", text)
+		} else {
+			summary = fmt.Sprintf("`%s` => `%s`", trimmedCurrent, text)
+		}
+	}
+
 	if c.offline {
-		// write to local file instead of making API call
 		if err := os.MkdirAll(c.outputDir, 0o755); err != nil {
 			return fmt.Errorf("ensure output dir: %w", err)
 		}
@@ -389,12 +410,13 @@ func (c *MediaWikiClient) EditPage(title, text string, bot bool) error {
 		}
 		return nil
 	}
+
 	return c.withCSRFWriteRetry(func(csrf string) error {
 		params := map[string]string{
 			"action":  "edit",
 			"title":   title,
 			"text":    text,
-			"summary": fmt.Sprintf("Updated by VPMM: %s", text),
+			"summary": summary,
 			"token":   csrf,
 		}
 		if bot {
@@ -682,12 +704,9 @@ func (c *MediaWikiClient) updateVersionSubpages(packageName, versionPath string,
 		return fmt.Errorf("update license page: %w", err)
 	}
 	// VPM (first listing URL)
-	var firstListingURL string
-	if version.Urls != nil && len(*version.Urls) > 0 {
-		firstListingURL = (*version.Urls)[0]
-	}
+	listingURL := firstListingURL(version.Urls)
 	vpmTitle := fmt.Sprintf("Template:VPM/%s/%s/VPM", packageName, versionPath)
-	if err := c.EditPage(vpmTitle, sanitizeForWiki(firstListingURL), true); err != nil {
+	if err := c.EditPage(vpmTitle, sanitizeForWiki(listingURL), true); err != nil {
 		return fmt.Errorf("update VPM page: %w", err)
 	}
 
