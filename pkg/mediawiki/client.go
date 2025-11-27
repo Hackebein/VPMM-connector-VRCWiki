@@ -199,13 +199,13 @@ func (c *MediaWikiClient) UpdateSinglePackage(pkg apiclient.Package) error {
 	return nil
 }
 
-func firstListingURL(urls *[]apiclient.PackageURL) string {
+func firstListingURL(urls *[]string) string {
 	if urls == nil {
 		return ""
 	}
 	for _, entry := range *urls {
-		if strings.TrimSpace(entry.Url) != "" {
-			return entry.Url
+		if strings.TrimSpace(entry) != "" {
+			return entry
 		}
 	}
 	return ""
