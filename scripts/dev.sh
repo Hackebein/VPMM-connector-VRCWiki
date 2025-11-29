@@ -11,10 +11,6 @@ export PATH="/usr/local/go/bin:${PATH}"
 export PATH="/go/bin:${PATH}"
 
 # Ensure required tools are available
-if ! command -v oapi-codegen >/dev/null 2>&1; then
-  go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.5.1
-fi
-
 if ! command -v reflex >/dev/null 2>&1; then
   go install github.com/cespare/reflex@latest
 fi
