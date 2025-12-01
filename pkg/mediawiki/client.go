@@ -198,18 +198,6 @@ func (c *MediaWikiClient) UpdateSinglePackage(pkg apiclient.Package) error {
 	return nil
 }
 
-func firstListingURL(urls *[]string) string {
-	if urls == nil {
-		return ""
-	}
-	for _, entry := range *urls {
-		if strings.TrimSpace(entry) != "" {
-			return entry
-		}
-	}
-	return ""
-}
-
 func (c *MediaWikiClient) apiRequest(params map[string]string) (map[string]any, error) {
 	params["format"] = "json"
 
