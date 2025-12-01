@@ -702,12 +702,6 @@ func (c *MediaWikiClient) updateVersionSubpages(packageName, versionPath string,
 	if err := c.EditPage(licTitle, sanitizeForWiki(str(version.License)), true); err != nil {
 		return fmt.Errorf("update license page: %w", err)
 	}
-	// VPM (first listing URL)
-	listingURL := firstListingURL(version.Urls)
-	vpmTitle := fmt.Sprintf("Template:VPM/%s/%s/VPM", packageName, versionPath)
-	if err := c.EditPage(vpmTitle, sanitizeForWiki(listingURL), true); err != nil {
-		return fmt.Errorf("update VPM page: %w", err)
-	}
 
 	// Authors handling
 	authorName := str(version.Author.Name)
