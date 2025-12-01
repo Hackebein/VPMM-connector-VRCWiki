@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Masterminds/semver/v3"
 
 	"github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/apiclient"
 	mw "github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/mediawiki"
@@ -136,16 +139,16 @@ func main() {
 
 // runFullSync orchestrates a complete wiki sync using the new client helpers.
 func runFullSync(ctx context.Context, cli *apiclient.ClientWithResponses, wikiClient *mw.MediaWikiClient, logger *log.Logger) {
-	resp, err := cli.ListPackagesWithResponse(ctx, nil)
+	resp, err := cli.GetIndexWithResponse(ctx, nil)
 	if err != nil {
-		logger.Printf("full sync: list packages: %v", err)
+		logger.Printf("full sync: get index: %v", err)
 		return
 	}
 	if resp.JSON200 == nil {
 		logger.Printf("full sync: empty response")
 		return
 	}
-	pkgs := *resp.JSON200
+	pkgs := flattenIndexPackages(resp.JSON200)
 
 	// Build versions map and compute latest/stable/unstable
 	allVersionsMap := mw.BuildAllVersionsMapFromAPI(pkgs)
@@ -213,4 +216,57 @@ func runFullSync(ctx context.Context, cli *apiclient.ClientWithResponses, wikiCl
 	if err := wikiClient.EditPage("Template:VPM/Version summary", table, true); err != nil {
 		logger.Printf("full sync: update version summary page: %v", err)
 	}
+}
+
+// flattenIndexPackages converts an index response into a slice of packages sorted
+// by version descending per package so downstream helpers continue to see the
+// latest version first.
+func flattenIndexPackages(idx *apiclient.VPMMIndex) []apiclient.Package {
+	if idx == nil || len(idx.Packages) == 0 {
+		return nil
+	}
+
+	// stable iteration order for determinism
+	names := make([]string, 0, len(idx.Packages))
+	for name := range idx.Packages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var out []apiclient.Package
+	for _, name := range names {
+		listPkg := idx.Packages[name]
+		if len(listPkg.Versions) == 0 {
+			continue
+		}
+		versions := make([]apiclient.Package, 0, len(listPkg.Versions))
+		for _, pkg := range listPkg.Versions {
+			versions = append(versions, pkg)
+		}
+		sortPackagesByVersionDesc(versions)
+		out = append(out, versions...)
+	}
+	return out
+}
+
+// sortPackagesByVersionDesc sorts packages in-place by semantic version
+// descending, falling back to string comparison when parsing fails.
+func sortPackagesByVersionDesc(pkgs []apiclient.Package) {
+	sort.SliceStable(pkgs, func(i, j int) bool {
+		left := strings.TrimSpace(pkgs[i].Version)
+		right := strings.TrimSpace(pkgs[j].Version)
+		vi, errI := semver.NewVersion(left)
+		vj, errJ := semver.NewVersion(right)
+
+		switch {
+		case errI == nil && errJ == nil:
+			return vi.GreaterThan(vj)
+		case errI == nil:
+			return true
+		case errJ == nil:
+			return false
+		default:
+			return left > right
+		}
+	})
 }
