@@ -164,7 +164,6 @@ func (c *MediaWikiClient) UpdateSinglePackage(pkg apiclient.Package) error {
 		fmt.Sprintf("Template:VPM/%s/Latest_version/Description", packageName): sanitizeForWiki(str(pkg.Description)),
 		fmt.Sprintf("Template:VPM/%s/Latest_version/DisplayName", packageName): sanitizeForWiki(pkg.DisplayName),
 		fmt.Sprintf("Template:VPM/%s/Latest_version/License", packageName):     sanitizeForWiki(str(pkg.License)),
-		fmt.Sprintf("Template:VPM/%s/Latest_version/VPM", packageName):         sanitizeForWiki(firstListingURL(pkg.Urls)),
 	}
 	if pkg.Author.Name != nil && *pkg.Author.Name != "" {
 		authors := strings.Split(*pkg.Author.Name, ",")
