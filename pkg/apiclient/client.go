@@ -1,6 +1,6 @@
 package apiclient
 
-//go:generate bash ../../scripts/generate-client.sh
+//go:generate ../../scripts/generate-client.sh
 
 import (
 	"context"

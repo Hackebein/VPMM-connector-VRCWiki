@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env sh
+set -eu
 OPENAPI_URL="${OPENAPI_URL:-https://vpmm.dev/openapi-3.0.json}"
 
 echo "Downloading OpenAPI schema from ${OPENAPI_URL}"
