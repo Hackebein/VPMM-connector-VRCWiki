@@ -17,14 +17,6 @@ import (
 	mw "github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/mediawiki"
 )
 
-func getenv(key, def string) string {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	return v
-}
-
 // minimal SSE event
 type sseEvent struct {
 	Event string
@@ -34,7 +26,10 @@ type sseEvent struct {
 func main() {
 	logger := log.New(os.Stdout, "vrcwiki-connector ", log.LstdFlags)
 
-	vpmmBaseURL := getenv("VPMM_API_BASE_URL", "https://vpmm.dev")
+	vpmmBaseURL := strings.TrimSpace(os.Getenv("VPMM_API_BASE_URL"))
+	if vpmmBaseURL == "" {
+		logger.Fatalf("missing env: VPMM_API_BASE_URL")
+	}
 	sseURL := strings.TrimRight(vpmmBaseURL, "/") + "/sse"
 
 	wikiAPI := os.Getenv("VRCWIKI_API_URL")
