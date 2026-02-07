@@ -26,10 +26,7 @@ type sseEvent struct {
 func main() {
 	logger := log.New(os.Stdout, "vrcwiki-connector ", log.LstdFlags)
 
-	vpmmBaseURL := strings.TrimSpace(os.Getenv("VPMM_API_BASE_URL"))
-	if vpmmBaseURL == "" {
-		logger.Fatalf("missing env: VPMM_API_BASE_URL")
-	}
+	vpmmBaseURL := "http://api:8080"
 	sseURL := strings.TrimRight(vpmmBaseURL, "/") + "/sse"
 
 	wikiAPI := os.Getenv("VRCWIKI_API_URL")
