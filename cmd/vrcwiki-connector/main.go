@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -136,11 +137,35 @@ func runFullSync(ctx context.Context, cli *apiclient.ClientWithResponses, wikiCl
 		logger.Printf("full sync: get index: %v", err)
 		return
 	}
-	if resp.JSON200 == nil {
-		logger.Printf("full sync: empty response")
+
+	// OpenAPI currently does not describe the /index.json 200 payload shape, so the
+	// generated client exposes it as raw bytes.
+	if resp.StatusCode() != http.StatusOK {
+		// Prefer structured error payloads when available.
+		switch {
+		case resp.ApplicationproblemJSON401 != nil:
+			logger.Printf("full sync: get index: unauthorized: %s", safeErrDetail(resp.ApplicationproblemJSON401))
+		case resp.ApplicationproblemJSON422 != nil:
+			logger.Printf("full sync: get index: unprocessable: %s", safeErrDetail(resp.ApplicationproblemJSON422))
+		case resp.ApplicationproblemJSON500 != nil:
+			logger.Printf("full sync: get index: server error: %s", safeErrDetail(resp.ApplicationproblemJSON500))
+		default:
+			logger.Printf("full sync: get index: unexpected status: %s", resp.Status())
+		}
 		return
 	}
-	pkgs := flattenIndexPackages(resp.JSON200)
+	if len(resp.Body) == 0 {
+		logger.Printf("full sync: get index: empty response body")
+		return
+	}
+
+	var idx vccIndex
+	if err := json.Unmarshal(resp.Body, &idx); err != nil {
+		logger.Printf("full sync: get index: decode json: %v", err)
+		return
+	}
+
+	pkgs := flattenIndexPackages(&idx)
 
 	// Build versions map and compute latest/stable/unstable
 	allVersionsMap := mw.BuildAllVersionsMapFromAPI(pkgs)
@@ -210,10 +235,19 @@ func runFullSync(ctx context.Context, cli *apiclient.ClientWithResponses, wikiCl
 	}
 }
 
+// vccIndex is the structure of `/index.json` (VPM/VCC spec listing).
+type vccIndex struct {
+	Packages map[string]vccIndexPackage `json:"packages"`
+}
+
+type vccIndexPackage struct {
+	Versions map[string]apiclient.Package `json:"versions"`
+}
+
 // flattenIndexPackages converts an index response into a slice of packages sorted
 // by version descending per package so downstream helpers continue to see the
 // latest version first.
-func flattenIndexPackages(idx *apiclient.VPMMIndex) []apiclient.Package {
+func flattenIndexPackages(idx *vccIndex) []apiclient.Package {
 	if idx == nil || len(idx.Packages) == 0 {
 		return nil
 	}
@@ -261,4 +295,20 @@ func sortPackagesByVersionDesc(pkgs []apiclient.Package) {
 			return left > right
 		}
 	})
+}
+
+func safeErrDetail(e *apiclient.ErrorModel) string {
+	if e == nil {
+		return ""
+	}
+	if e.Title != nil && e.Detail != nil {
+		return *e.Title + ": " + *e.Detail
+	}
+	if e.Detail != nil {
+		return *e.Detail
+	}
+	if e.Title != nil {
+		return *e.Title
+	}
+	return ""
 }
