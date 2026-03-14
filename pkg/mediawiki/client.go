@@ -147,6 +147,83 @@ func (c *MediaWikiClient) pageFilePath(title string) string {
 	return filepath.Join(dir, sanitizeFilename(title))
 }
 
+const maxEditSummaryLen = 120
+
+func clipSummary(summary string) string {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return "sync wiki page"
+	}
+	runes := []rune(summary)
+	if len(runes) <= maxEditSummaryLen {
+		return summary
+	}
+	return string(runes[:maxEditSummaryLen-3]) + "..."
+}
+
+func shortFieldName(field string) string {
+	switch strings.ToLower(strings.TrimSpace(field)) {
+	case "description":
+		return "description"
+	case "displayname":
+		return "display-name"
+	case "license":
+		return "license"
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(field)), "author_") {
+		return "author"
+	}
+	return strings.TrimSpace(field)
+}
+
+func buildEditSummary(title, newText string) string {
+	if strings.EqualFold(strings.TrimSpace(title), VersionSummaryPageTitle) {
+		return "sync version summary"
+	}
+
+	const prefix = "Template:VPM/"
+	if !strings.HasPrefix(title, prefix) {
+		return clipSummary(fmt.Sprintf("sync %s", title))
+	}
+
+	parts := strings.Split(strings.TrimPrefix(title, prefix), "/")
+	if len(parts) < 2 {
+		return clipSummary(fmt.Sprintf("sync %s", title))
+	}
+
+	packageName := strings.TrimSpace(parts[0])
+	section := strings.TrimSpace(parts[1])
+	trimmedNew := strings.TrimSpace(newText)
+	if packageName == "" || section == "" {
+		return clipSummary(fmt.Sprintf("sync %s", title))
+	}
+
+	switch section {
+	case "Latest_version":
+		section = "latest"
+	case "Latest_stable_version":
+		section = "stable"
+	case "Latest_unstable_version":
+		section = "unstable"
+	}
+
+	if len(parts) == 2 {
+		if section == "latest" || section == "stable" || section == "unstable" {
+			if trimmedNew == "" {
+				return clipSummary(fmt.Sprintf("%s %s", packageName, section))
+			}
+			return clipSummary(fmt.Sprintf("%s %s=%s", packageName, section, trimmedNew))
+		}
+		if trimmedNew == "" {
+			return clipSummary(fmt.Sprintf("%s version=%s", packageName, section))
+		}
+		return clipSummary(fmt.Sprintf("%s version=%s", packageName, trimmedNew))
+	}
+
+	field := shortFieldName(parts[2])
+	return clipSummary(fmt.Sprintf("%s %s %s", packageName, section, field))
+}
+
 // UpdateSinglePackage performs a create-or-update flow for a package's Latest_version subtree.
 // Unlike the gated helpers, this will create missing pages as needed.
 func (c *MediaWikiClient) UpdateSinglePackage(pkg apiclient.Package) error {
@@ -365,24 +442,18 @@ func (c *MediaWikiClient) Login() error {
 func (c *MediaWikiClient) EditPage(title, text string, bot bool) error {
 	trimmedNew := strings.TrimSpace(text)
 	currentContent, err := c.getPageContent(title)
-	var summary string
 	if err != nil {
 		if !strings.Contains(err.Error(), "page does not exist") {
 			return fmt.Errorf("get current content for page %s: %w", title, err)
 		}
 		currentContent = ""
-		summary = fmt.Sprintf("Set: `%s`", text)
 	} else {
 		trimmedCurrent := strings.TrimSpace(currentContent)
 		if trimmedCurrent == trimmedNew {
 			return nil
 		}
-		if trimmedCurrent == "" {
-			summary = fmt.Sprintf("Set: `%s`", text)
-		} else {
-			summary = fmt.Sprintf("`%s` => `%s`", trimmedCurrent, text)
-		}
 	}
+	summary := buildEditSummary(title, trimmedNew)
 
 	if c.offline {
 		if err := os.MkdirAll(c.outputDir, 0o755); err != nil {
