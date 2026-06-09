@@ -241,7 +241,7 @@ type vccIndex struct {
 }
 
 type vccIndexPackage struct {
-	Versions map[string]apiclient.Package `json:"versions"`
+	Versions map[string]mw.IndexPackageVersion `json:"versions"`
 }
 
 // flattenIndexPackages converts an index response into a slice of packages sorted
@@ -266,8 +266,9 @@ func flattenIndexPackages(idx *vccIndex) []apiclient.Package {
 			continue
 		}
 		versions := make([]apiclient.Package, 0, len(listPkg.Versions))
-		for _, pkg := range listPkg.Versions {
-			versions = append(versions, pkg)
+		for versionKey, entry := range listPkg.Versions {
+			entry.VersionKey = versionKey
+			versions = append(versions, mw.PackageFromIndexVersion(name, entry))
 		}
 		sortPackagesByVersionDesc(versions)
 		out = append(out, versions...)

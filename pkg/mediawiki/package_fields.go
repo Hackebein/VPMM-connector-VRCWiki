@@ -1,6 +1,10 @@
 package mediawiki
 
-import apiclient "github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/apiclient"
+import (
+	"strings"
+
+	apiclient "github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/apiclient"
+)
 
 func PackageName(pkg apiclient.Package) string {
 	return pkg.VPMPackage.VPMIdentifier.Name
@@ -24,4 +28,28 @@ func packageLicensePtr(pkg apiclient.Package) *string {
 
 func packageAuthorPtr(pkg apiclient.Package) *apiclient.VPMAuthor {
 	return pkg.VPMPackage.Author
+}
+
+// PackageFromIndexVersion maps a flat /index.json version entry to apiclient.Package.
+func PackageFromIndexVersion(packageName string, v IndexPackageVersion) apiclient.Package {
+	version := strings.TrimSpace(v.Version)
+	if version == "" {
+		version = strings.TrimSpace(v.VersionKey)
+	}
+	displayName := strings.TrimSpace(v.DisplayName)
+	if displayName == "" {
+		displayName = packageName
+	}
+	return apiclient.Package{
+		VPMPackage: apiclient.VPMPackage{
+			VPMIdentifier: apiclient.VPMIdentifier{
+				Name:        packageName,
+				Version:     version,
+				DisplayName: displayName,
+			},
+			Description: v.Description,
+			License:     v.License,
+			Author:      v.Author,
+		},
+	}
 }
