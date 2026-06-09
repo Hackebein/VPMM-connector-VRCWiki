@@ -446,7 +446,6 @@ func (c *MediaWikiClient) EditPage(title, text string, bot bool) error {
 		if !strings.Contains(err.Error(), "page does not exist") {
 			return fmt.Errorf("get current content for page %s: %w", title, err)
 		}
-		currentContent = ""
 	} else {
 		trimmedCurrent := strings.TrimSpace(currentContent)
 		if trimmedCurrent == trimmedNew {
