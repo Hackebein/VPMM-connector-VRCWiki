@@ -39,7 +39,7 @@ func ComputeLatestStableUnstable(allVersions map[string][]apiclient.Package) (ma
 		var bestUnstablePV apiclient.Package
 
 		for _, v := range versions {
-			sv, err := semver.NewVersion(strings.TrimSpace(v.Version))
+			sv, err := semver.NewVersion(strings.TrimSpace(PackageVersion(v)))
 			if err != nil {
 				continue
 			}
@@ -101,8 +101,8 @@ func GetVersionSummaryTableWithWikiVersions(wikiVersionsMap map[string][]string,
 	var summaries []PackageVersionSummary
 	for _, name := range names {
 		display := name
-		if vs := allVersionsMap[name]; len(vs) > 0 && strings.TrimSpace(vs[0].DisplayName) != "" {
-			display = vs[0].DisplayName
+		if vs := allVersionsMap[name]; len(vs) > 0 && strings.TrimSpace(packageDisplayName(vs[0])) != "" {
+			display = packageDisplayName(vs[0])
 		}
 		s := PackageVersionSummary{Name: name, DisplayName: display}
 		if v, ok := latestMap[name]; ok {
@@ -122,7 +122,7 @@ func GetVersionSummaryTableWithWikiVersions(wikiVersionsMap map[string][]string,
 		if wikiV, ok := wikiVersionsMap[name]; ok {
 			known := make(map[string]struct{})
 			for _, pv := range allVersionsMap[name] {
-				known[pv.Version] = struct{}{}
+				known[PackageVersion(pv)] = struct{}{}
 			}
 			var filtered []string
 			for _, wv := range wikiV {
@@ -167,17 +167,17 @@ func GenerateVersionSummaryWikiTableWithWikiVersions(wikiVersionsMap map[string]
 		if s.LatestVersion != nil {
 			sb.WriteString("\n")
 			sb.WriteString(fmt.Sprintf("* [[Template:VPM/%s/Latest version|Latest version]] ([[Template:VPM/%s/%s|%s]])\n",
-				sanitizeForWiki(s.Name), sanitizeForWiki(s.Name), sanitizeForWiki(s.LatestVersion.Version), sanitizeForWiki(s.LatestVersion.Version)))
+				sanitizeForWiki(s.Name), sanitizeForWiki(s.Name), sanitizeForWiki(PackageVersion(*s.LatestVersion)), sanitizeForWiki(PackageVersion(*s.LatestVersion))))
 		}
 		if s.LatestStable != nil {
 			sb.WriteString("\n")
 			sb.WriteString(fmt.Sprintf("* [[Template:VPM/%s/Latest stable version|Latest stable version]] ([[Template:VPM/%s/%s|%s]])\n",
-				sanitizeForWiki(s.Name), sanitizeForWiki(s.Name), sanitizeForWiki(s.LatestStable.Version), sanitizeForWiki(s.LatestStable.Version)))
+				sanitizeForWiki(s.Name), sanitizeForWiki(s.Name), sanitizeForWiki(PackageVersion(*s.LatestStable)), sanitizeForWiki(PackageVersion(*s.LatestStable))))
 		}
 		if s.LatestUnstable != nil {
 			sb.WriteString("\n")
 			sb.WriteString(fmt.Sprintf("* [[Template:VPM/%s/Latest unstable version|Latest unstable version]] ([[Template:VPM/%s/%s|%s]])\n",
-				sanitizeForWiki(s.Name), sanitizeForWiki(s.Name), sanitizeForWiki(s.LatestUnstable.Version), sanitizeForWiki(s.LatestUnstable.Version)))
+				sanitizeForWiki(s.Name), sanitizeForWiki(s.Name), sanitizeForWiki(PackageVersion(*s.LatestUnstable)), sanitizeForWiki(PackageVersion(*s.LatestUnstable))))
 		}
 		if len(s.WikiVersions) > 0 {
 			for _, v := range s.WikiVersions {
@@ -194,7 +194,7 @@ func GenerateVersionSummaryWikiTableWithWikiVersions(wikiVersionsMap map[string]
 func BuildAllVersionsMapFromAPI(pkgs []apiclient.Package) map[string][]apiclient.Package {
 	result := make(map[string][]apiclient.Package)
 	for _, p := range pkgs {
-		result[p.Name] = append(result[p.Name], p)
+		result[PackageName(p)] = append(result[PackageName(p)], p)
 	}
 	return result
 }

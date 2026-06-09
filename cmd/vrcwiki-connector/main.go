@@ -211,7 +211,7 @@ func runFullSync(ctx context.Context, cli *apiclient.ClientWithResponses, wikiCl
 		known := make(map[string]apiclient.Package)
 		if vs, ok := allVersionsMap[name]; ok {
 			for _, pv := range vs {
-				known[pv.Version] = pv
+				known[mw.PackageVersion(pv)] = pv
 			}
 		}
 		// process version pages detected on wiki
@@ -279,8 +279,8 @@ func flattenIndexPackages(idx *vccIndex) []apiclient.Package {
 // descending, falling back to string comparison when parsing fails.
 func sortPackagesByVersionDesc(pkgs []apiclient.Package) {
 	sort.SliceStable(pkgs, func(i, j int) bool {
-		left := strings.TrimSpace(pkgs[i].Version)
-		right := strings.TrimSpace(pkgs[j].Version)
+		left := strings.TrimSpace(mw.PackageVersion(pkgs[i]))
+		right := strings.TrimSpace(mw.PackageVersion(pkgs[j]))
 		vi, errI := semver.NewVersion(left)
 		vj, errJ := semver.NewVersion(right)
 

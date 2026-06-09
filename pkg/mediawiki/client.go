@@ -191,10 +191,10 @@ func buildEditSummary(title, newText string) string {
 		return clipSummary(fmt.Sprintf("sync %s", title))
 	}
 
-	packageName := strings.TrimSpace(parts[0])
+	PackageName := strings.TrimSpace(parts[0])
 	section := strings.TrimSpace(parts[1])
 	trimmedNew := strings.TrimSpace(newText)
-	if packageName == "" || section == "" {
+	if PackageName == "" || section == "" {
 		return clipSummary(fmt.Sprintf("sync %s", title))
 	}
 
@@ -210,24 +210,24 @@ func buildEditSummary(title, newText string) string {
 	if len(parts) == 2 {
 		if section == "latest" || section == "stable" || section == "unstable" {
 			if trimmedNew == "" {
-				return clipSummary(fmt.Sprintf("%s %s", packageName, section))
+				return clipSummary(fmt.Sprintf("%s %s", PackageName, section))
 			}
-			return clipSummary(fmt.Sprintf("%s %s=%s", packageName, section, trimmedNew))
+			return clipSummary(fmt.Sprintf("%s %s=%s", PackageName, section, trimmedNew))
 		}
 		if trimmedNew == "" {
-			return clipSummary(fmt.Sprintf("%s version=%s", packageName, section))
+			return clipSummary(fmt.Sprintf("%s version=%s", PackageName, section))
 		}
-		return clipSummary(fmt.Sprintf("%s version=%s", packageName, trimmedNew))
+		return clipSummary(fmt.Sprintf("%s version=%s", PackageName, trimmedNew))
 	}
 
 	field := shortFieldName(parts[2])
-	return clipSummary(fmt.Sprintf("%s %s %s", packageName, section, field))
+	return clipSummary(fmt.Sprintf("%s %s %s", PackageName, section, field))
 }
 
 // UpdateSinglePackage performs a create-or-update flow for a package's Latest_version subtree.
 // Unlike the gated helpers, this will create missing pages as needed.
 func (c *MediaWikiClient) UpdateSinglePackage(pkg apiclient.Package) error {
-	packageName := pkg.Name
+	name := PackageName(pkg)
 	updated := 0
 	// helpers for optional fields
 	str := func(p *string) string {
@@ -237,20 +237,20 @@ func (c *MediaWikiClient) UpdateSinglePackage(pkg apiclient.Package) error {
 		return *p
 	}
 	pagesToUpdate := map[string]string{
-		fmt.Sprintf("Template:VPM/%s/Latest_version", packageName):             sanitizeForWiki(pkg.Version),
-		fmt.Sprintf("Template:VPM/%s/Latest_version/Description", packageName): sanitizeForWiki(str(pkg.Description)),
-		fmt.Sprintf("Template:VPM/%s/Latest_version/DisplayName", packageName): sanitizeForWiki(pkg.DisplayName),
-		fmt.Sprintf("Template:VPM/%s/Latest_version/License", packageName):     sanitizeForWiki(str(pkg.License)),
+		fmt.Sprintf("Template:VPM/%s/Latest_version", name):             sanitizeForWiki(PackageVersion(pkg)),
+		fmt.Sprintf("Template:VPM/%s/Latest_version/Description", name): sanitizeForWiki(str(packageDescriptionPtr(pkg))),
+		fmt.Sprintf("Template:VPM/%s/Latest_version/DisplayName", name): sanitizeForWiki(packageDisplayName(pkg)),
+		fmt.Sprintf("Template:VPM/%s/Latest_version/License", name):     sanitizeForWiki(str(packageLicensePtr(pkg))),
 	}
-	if pkg.Author.Name != nil && *pkg.Author.Name != "" {
-		authors := strings.Split(*pkg.Author.Name, ",")
+	if author := packageAuthorPtr(pkg); author != nil && author.Name != nil && *author.Name != "" {
+		authors := strings.Split(*author.Name, ",")
 		if len(authors) > 4 {
 			authors = authors[:4]
 		}
 		for i, author := range authors {
 			author = strings.TrimSpace(author)
 			if author != "" {
-				pagesToUpdate[fmt.Sprintf("Template:VPM/%s/Latest_version/Author_%d", packageName, i+1)] = sanitizeForWiki(author)
+				pagesToUpdate[fmt.Sprintf("Template:VPM/%s/Latest_version/Author_%d", name, i+1)] = sanitizeForWiki(author)
 			}
 		}
 	}
@@ -270,7 +270,7 @@ func (c *MediaWikiClient) UpdateSinglePackage(pkg apiclient.Package) error {
 		}
 	}
 	if c.logger != nil {
-		c.logger.Info("wiki package updated", "package", packageName, "updated", updated)
+		c.logger.Info("wiki package updated", "package", name, "updated", updated)
 	}
 	return nil
 }
@@ -657,7 +657,7 @@ func (c *MediaWikiClient) getAllPages(prefix string) ([]string, error) {
 }
 
 // parseVPMPageTitle parses a VPM page title and extracts package name, page type, and version/tag.
-// Returns: packageName, pageType, versionTag
+// Returns: PackageName, pageType, versionTag
 func parseVPMPageTitle(title string) (string, string, string) {
 	if !strings.HasPrefix(title, "Template:VPM/") {
 		return "", "", ""
@@ -667,7 +667,7 @@ func parseVPMPageTitle(title string) (string, string, string) {
 	if len(parts) < 2 {
 		return "", "", ""
 	}
-	packageName := parts[0]
+	PackageName := parts[0]
 
 	normalize := func(s string) string {
 		return strings.ReplaceAll(s, "_", " ")
@@ -677,34 +677,34 @@ func parseVPMPageTitle(title string) (string, string, string) {
 	switch second {
 	case "Latest version":
 		if len(parts) == 2 {
-			return packageName, "latest_version", ""
+			return PackageName, "latest_version", ""
 		}
-		return packageName, "latest_version_subpage", parts[2]
+		return PackageName, "latest_version_subpage", parts[2]
 	case "Latest stable version":
 		if len(parts) == 2 {
-			return packageName, "latest_stable_version", ""
+			return PackageName, "latest_stable_version", ""
 		}
-		return packageName, "latest_stable_version_subpage", parts[2]
+		return PackageName, "latest_stable_version_subpage", parts[2]
 	case "Latest unstable version":
 		if len(parts) == 2 {
-			return packageName, "latest_unstable_version", ""
+			return PackageName, "latest_unstable_version", ""
 		}
-		return packageName, "latest_unstable_version_subpage", parts[2]
+		return PackageName, "latest_unstable_version_subpage", parts[2]
 	default:
 		versionTag := parts[1]
 		if len(parts) == 2 {
 			// must be a specific version page; ensure semver-only checking is handled by caller
 			// but we still return it here
-			return packageName, "version", versionTag
+			return PackageName, "version", versionTag
 		}
-		return packageName, "version_subpage", versionTag
+		return PackageName, "version_subpage", versionTag
 	}
 }
 
 // ProcessSpecificVersionPage handles a specific version page (semver-only).
 // Gated: only updates when the specific version page already exists.
-func (c *MediaWikiClient) ProcessSpecificVersionPage(packageName, versionTag string, knownVersions map[string]apiclient.Package) error {
-	versionPageTitle := fmt.Sprintf("Template:VPM/%s/%s", packageName, versionTag)
+func (c *MediaWikiClient) ProcessSpecificVersionPage(PackageName, versionTag string, knownVersions map[string]apiclient.Package) error {
+	versionPageTitle := fmt.Sprintf("Template:VPM/%s/%s", PackageName, versionTag)
 	// gate: only proceed if the specific version page already exists
 	exists, err := c.pageExists(versionPageTitle)
 	if err != nil {
@@ -721,22 +721,22 @@ func (c *MediaWikiClient) ProcessSpecificVersionPage(packageName, versionTag str
 	v, err := semver.StrictNewVersion(strings.TrimSpace(content))
 	if err != nil {
 		if c.logger != nil {
-			c.logger.Warn("non-semver version content on page", "package", packageName, "page", versionPageTitle, "content", strings.TrimSpace(content))
+			c.logger.Warn("non-semver version content on page", "package", PackageName, "page", versionPageTitle, "content", strings.TrimSpace(content))
 		}
 		return nil
 	}
 	// if known, update subpages for this version (main page content is the source of truth)
 	if pkgVersion, ok := knownVersions[v.String()]; ok {
-		return c.updateVersionSubpages(packageName, versionTag, pkgVersion)
+		return c.updateVersionSubpages(PackageName, versionTag, pkgVersion)
 	}
 	if c.logger != nil {
-		c.logger.Info("version from page content not found in known versions", "package", packageName, "version", v.String(), "page", versionPageTitle)
+		c.logger.Info("version from page content not found in known versions", "package", PackageName, "version", v.String(), "page", versionPageTitle)
 	}
 	return nil
 }
 
 // updateVersionSubpages updates the subpages for a version (either Latest_* or specific version tag)
-func (c *MediaWikiClient) updateVersionSubpages(packageName, versionPath string, version apiclient.Package) error {
+func (c *MediaWikiClient) updateVersionSubpages(PackageName, versionPath string, version apiclient.Package) error {
 	// helpers
 	str := func(p *string) string {
 		if p == nil {
@@ -746,23 +746,26 @@ func (c *MediaWikiClient) updateVersionSubpages(packageName, versionPath string,
 	}
 
 	// Description
-	descTitle := fmt.Sprintf("Template:VPM/%s/%s/Description", packageName, versionPath)
-	if err := c.EditPage(descTitle, sanitizeForWiki(str(version.Description)), true); err != nil {
+	descTitle := fmt.Sprintf("Template:VPM/%s/%s/Description", PackageName, versionPath)
+	if err := c.EditPage(descTitle, sanitizeForWiki(str(packageDescriptionPtr(version))), true); err != nil {
 		return fmt.Errorf("update description page: %w", err)
 	}
 	// DisplayName
-	dnTitle := fmt.Sprintf("Template:VPM/%s/%s/DisplayName", packageName, versionPath)
-	if err := c.EditPage(dnTitle, sanitizeForWiki(version.DisplayName), true); err != nil {
+	dnTitle := fmt.Sprintf("Template:VPM/%s/%s/DisplayName", PackageName, versionPath)
+	if err := c.EditPage(dnTitle, sanitizeForWiki(packageDisplayName(version)), true); err != nil {
 		return fmt.Errorf("update display name page: %w", err)
 	}
 	// License
-	licTitle := fmt.Sprintf("Template:VPM/%s/%s/License", packageName, versionPath)
-	if err := c.EditPage(licTitle, sanitizeForWiki(str(version.License)), true); err != nil {
+	licTitle := fmt.Sprintf("Template:VPM/%s/%s/License", PackageName, versionPath)
+	if err := c.EditPage(licTitle, sanitizeForWiki(str(packageLicensePtr(version))), true); err != nil {
 		return fmt.Errorf("update license page: %w", err)
 	}
 
 	// Authors handling
-	authorName := str(version.Author.Name)
+	authorName := ""
+	if author := packageAuthorPtr(version); author != nil {
+		authorName = str(author.Name)
+	}
 	if strings.TrimSpace(authorName) != "" {
 		authors := strings.Split(authorName, ",")
 		for i := range authors {
@@ -775,14 +778,14 @@ func (c *MediaWikiClient) updateVersionSubpages(packageName, versionPath string,
 			if author == "" {
 				continue
 			}
-			aTitle := fmt.Sprintf("Template:VPM/%s/%s/Author_%d", packageName, versionPath, i+1)
+			aTitle := fmt.Sprintf("Template:VPM/%s/%s/Author_%d", PackageName, versionPath, i+1)
 			if err := c.EditPage(aTitle, sanitizeForWiki(author), true); err != nil {
 				return fmt.Errorf("update Author_%d page: %w", i+1, err)
 			}
 		}
 		// cleanup any leftover author pages up to 4
 		for i := len(authors) + 1; i <= 4; i++ {
-			aTitle := fmt.Sprintf("Template:VPM/%s/%s/Author_%d", packageName, versionPath, i)
+			aTitle := fmt.Sprintf("Template:VPM/%s/%s/Author_%d", PackageName, versionPath, i)
 			if _, err := c.getPageContent(aTitle); err == nil {
 				_ = c.DeletePage(aTitle, "Author removed from package")
 			}
@@ -790,7 +793,7 @@ func (c *MediaWikiClient) updateVersionSubpages(packageName, versionPath string,
 	} else {
 		// no authors; cleanup possible existing pages 1..4
 		for i := 1; i <= 4; i++ {
-			aTitle := fmt.Sprintf("Template:VPM/%s/%s/Author_%d", packageName, versionPath, i)
+			aTitle := fmt.Sprintf("Template:VPM/%s/%s/Author_%d", PackageName, versionPath, i)
 			if _, err := c.getPageContent(aTitle); err == nil {
 				_ = c.DeletePage(aTitle, "Author removed from package")
 			}
@@ -802,7 +805,7 @@ func (c *MediaWikiClient) updateVersionSubpages(packageName, versionPath string,
 // UpdateLatestVersionPages updates the Latest_version page and its subpages for a package.
 // Gated: only updates when the Latest_version page already exists.
 func (c *MediaWikiClient) UpdateLatestVersionPages(version apiclient.Package) error {
-	pkg := version.Name
+	pkg := PackageName(version)
 	title := fmt.Sprintf("Template:VPM/%s/Latest_version", pkg)
 	// gate: only update if main page already exists
 	exists, err := c.pageExists(title)
@@ -812,7 +815,7 @@ func (c *MediaWikiClient) UpdateLatestVersionPages(version apiclient.Package) er
 	if !exists {
 		return nil
 	}
-	if err := c.EditPage(title, sanitizeForWiki(version.Version), true); err != nil {
+	if err := c.EditPage(title, sanitizeForWiki(PackageVersion(version)), true); err != nil {
 		return fmt.Errorf("update latest version page: %w", err)
 	}
 	return c.updateVersionSubpages(pkg, "Latest_version", version)
@@ -821,7 +824,7 @@ func (c *MediaWikiClient) UpdateLatestVersionPages(version apiclient.Package) er
 // UpdateLatestStableVersionPages updates the Latest_stable_version page and its subpages.
 // Gated: only updates when the Latest_stable_version page already exists.
 func (c *MediaWikiClient) UpdateLatestStableVersionPages(version apiclient.Package) error {
-	pkg := version.Name
+	pkg := PackageName(version)
 	title := fmt.Sprintf("Template:VPM/%s/Latest_stable_version", pkg)
 	// gate: only update if main page already exists
 	exists, err := c.pageExists(title)
@@ -831,7 +834,7 @@ func (c *MediaWikiClient) UpdateLatestStableVersionPages(version apiclient.Packa
 	if !exists {
 		return nil
 	}
-	if err := c.EditPage(title, sanitizeForWiki(version.Version), true); err != nil {
+	if err := c.EditPage(title, sanitizeForWiki(PackageVersion(version)), true); err != nil {
 		return fmt.Errorf("update latest stable version page: %w", err)
 	}
 	return c.updateVersionSubpages(pkg, "Latest_stable_version", version)
@@ -840,7 +843,7 @@ func (c *MediaWikiClient) UpdateLatestStableVersionPages(version apiclient.Packa
 // UpdateLatestUnstableVersionPages updates the Latest_unstable_version page and its subpages.
 // Gated: only updates when the Latest_unstable_version page already exists.
 func (c *MediaWikiClient) UpdateLatestUnstableVersionPages(version apiclient.Package) error {
-	pkg := version.Name
+	pkg := PackageName(version)
 	title := fmt.Sprintf("Template:VPM/%s/Latest_unstable_version", pkg)
 	// gate: only update if main page already exists
 	exists, err := c.pageExists(title)
@@ -850,7 +853,7 @@ func (c *MediaWikiClient) UpdateLatestUnstableVersionPages(version apiclient.Pac
 	if !exists {
 		return nil
 	}
-	if err := c.EditPage(title, sanitizeForWiki(version.Version), true); err != nil {
+	if err := c.EditPage(title, sanitizeForWiki(PackageVersion(version)), true); err != nil {
 		return fmt.Errorf("update latest unstable version page: %w", err)
 	}
 	return c.updateVersionSubpages(pkg, "Latest_unstable_version", version)
