@@ -14,11 +14,3 @@ WORKDIR /app
 COPY --from=build /out/vrcwiki-connector /app/vrcwiki-connector
 USER nonroot:nonroot
 ENTRYPOINT ["/app/vrcwiki-connector"]
-
-
-FROM gcr.io/distroless/base-debian12:nonroot
-WORKDIR /app
-COPY --from=build /out/vrcwiki-connector /app/vrcwiki-connector
-USER nonroot:nonroot
-ENTRYPOINT ["/app/vrcwiki-connector"]
-
