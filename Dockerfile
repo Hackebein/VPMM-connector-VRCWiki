@@ -14,7 +14,8 @@ COPY . .
 RUN go generate ./pkg/apiclient
 
 # Build binary
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/vrcwiki-connector ./cmd/vrcwiki-connector
+ARG APP_VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/mediawiki.buildVersion=${APP_VERSION} -s -w" -o /out/vrcwiki-connector ./cmd/vrcwiki-connector
 
 FROM gcr.io/distroless/base-debian12:nonroot
 WORKDIR /app

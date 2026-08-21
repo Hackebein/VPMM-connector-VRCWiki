@@ -44,7 +44,9 @@ type MediaWikiClient struct {
 	offline   bool
 	outputDir string
 
-	logger *slog.Logger
+	logger  *slog.Logger
+	stats   RequestStats
+	statsMu sync.Mutex
 }
 
 // buildVersion holds the version injected at build time via -ldflags. Defaults to "dev".
@@ -310,6 +312,7 @@ func (c *MediaWikiClient) apiRequest(params map[string]string) (map[string]any, 
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
+	c.recordRequest(params["action"])
 
 	var result map[string]any
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -449,6 +452,7 @@ func (c *MediaWikiClient) EditPage(title, text string, bot bool) error {
 	} else {
 		trimmedCurrent := strings.TrimSpace(currentContent)
 		if trimmedCurrent == trimmedNew {
+			c.recordSkip()
 			return nil
 		}
 	}
@@ -704,18 +708,21 @@ func parseVPMPageTitle(title string) (string, string, string) {
 // ProcessSpecificVersionPage handles a specific version page (semver-only).
 // Gated: only updates when the specific version page already exists.
 func (c *MediaWikiClient) ProcessSpecificVersionPage(PackageName, versionTag string, knownVersions map[string]apiclient.Package) error {
+	return c.processSpecificVersionPage(PackageName, versionTag, knownVersions, nil)
+}
+
+func (c *MediaWikiClient) processSpecificVersionPage(PackageName, versionTag string, knownVersions map[string]apiclient.Package, existingTitles map[string]struct{}) error {
 	versionPageTitle := fmt.Sprintf("Template:VPM/%s/%s", PackageName, versionTag)
-	// gate: only proceed if the specific version page already exists
-	exists, err := c.pageExists(versionPageTitle)
-	if err != nil {
-		return fmt.Errorf("check existence for %s: %w", versionPageTitle, err)
+	if existingTitles != nil {
+		if !hasWikiTitle(existingTitles, versionPageTitle) {
+			return nil
+		}
 	}
-	if !exists {
-		return nil
-	}
-	// read version from the page content, allowing free-form page names
 	content, err := c.getPageContent(versionPageTitle)
 	if err != nil {
+		if strings.Contains(err.Error(), "page does not exist") {
+			return nil
+		}
 		return fmt.Errorf("read content from %s: %w", versionPageTitle, err)
 	}
 	v, err := semver.StrictNewVersion(strings.TrimSpace(content))
@@ -725,9 +732,8 @@ func (c *MediaWikiClient) ProcessSpecificVersionPage(PackageName, versionTag str
 		}
 		return nil
 	}
-	// if known, update subpages for this version (main page content is the source of truth)
 	if pkgVersion, ok := knownVersions[v.String()]; ok {
-		return c.updateVersionSubpages(PackageName, versionTag, pkgVersion)
+		return c.updateVersionSubpages(PackageName, versionTag, pkgVersion, existingTitles)
 	}
 	if c.logger != nil {
 		c.logger.Info("version from page content not found in known versions", "package", PackageName, "version", v.String(), "page", versionPageTitle)
@@ -736,7 +742,7 @@ func (c *MediaWikiClient) ProcessSpecificVersionPage(PackageName, versionTag str
 }
 
 // updateVersionSubpages updates the subpages for a version (either Latest_* or specific version tag)
-func (c *MediaWikiClient) updateVersionSubpages(PackageName, versionPath string, version apiclient.Package) error {
+func (c *MediaWikiClient) updateVersionSubpages(PackageName, versionPath string, version apiclient.Package, existingTitles map[string]struct{}) error {
 	// helpers
 	str := func(p *string) string {
 		if p == nil {
@@ -786,77 +792,74 @@ func (c *MediaWikiClient) updateVersionSubpages(PackageName, versionPath string,
 		// cleanup any leftover author pages up to 4
 		for i := len(authors) + 1; i <= 4; i++ {
 			aTitle := fmt.Sprintf("Template:VPM/%s/%s/Author_%d", PackageName, versionPath, i)
-			if _, err := c.getPageContent(aTitle); err == nil {
-				_ = c.DeletePage(aTitle, "Author removed from package")
+			if err := c.deleteAuthorPageIfPresent(aTitle, existingTitles); err != nil {
+				return err
 			}
 		}
 	} else {
 		// no authors; cleanup possible existing pages 1..4
 		for i := 1; i <= 4; i++ {
 			aTitle := fmt.Sprintf("Template:VPM/%s/%s/Author_%d", PackageName, versionPath, i)
-			if _, err := c.getPageContent(aTitle); err == nil {
-				_ = c.DeletePage(aTitle, "Author removed from package")
+			if err := c.deleteAuthorPageIfPresent(aTitle, existingTitles); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
+func (c *MediaWikiClient) deleteAuthorPageIfPresent(title string, existingTitles map[string]struct{}) error {
+	if existingTitles != nil && !hasWikiTitle(existingTitles, title) {
+		return nil
+	}
+	if _, err := c.getPageContent(title); err != nil {
+		if strings.Contains(err.Error(), "page does not exist") {
+			return nil
+		}
+		return fmt.Errorf("read author page %s: %w", title, err)
+	}
+	_ = c.DeletePage(title, "Author removed from package")
+	return nil
+}
+
 // UpdateLatestVersionPages updates the Latest_version page and its subpages for a package.
 // Gated: only updates when the Latest_version page already exists.
 func (c *MediaWikiClient) UpdateLatestVersionPages(version apiclient.Package) error {
-	pkg := PackageName(version)
-	title := fmt.Sprintf("Template:VPM/%s/Latest_version", pkg)
-	// gate: only update if main page already exists
-	exists, err := c.pageExists(title)
-	if err != nil {
-		return fmt.Errorf("check existence for %s: %w", title, err)
-	}
-	if !exists {
-		return nil
-	}
-	if err := c.EditPage(title, sanitizeForWiki(PackageVersion(version)), true); err != nil {
-		return fmt.Errorf("update latest version page: %w", err)
-	}
-	return c.updateVersionSubpages(pkg, "Latest_version", version)
+	return c.updateLatestPages(version, "Latest_version", nil)
 }
 
 // UpdateLatestStableVersionPages updates the Latest_stable_version page and its subpages.
 // Gated: only updates when the Latest_stable_version page already exists.
 func (c *MediaWikiClient) UpdateLatestStableVersionPages(version apiclient.Package) error {
-	pkg := PackageName(version)
-	title := fmt.Sprintf("Template:VPM/%s/Latest_stable_version", pkg)
-	// gate: only update if main page already exists
-	exists, err := c.pageExists(title)
-	if err != nil {
-		return fmt.Errorf("check existence for %s: %w", title, err)
-	}
-	if !exists {
-		return nil
-	}
-	if err := c.EditPage(title, sanitizeForWiki(PackageVersion(version)), true); err != nil {
-		return fmt.Errorf("update latest stable version page: %w", err)
-	}
-	return c.updateVersionSubpages(pkg, "Latest_stable_version", version)
+	return c.updateLatestPages(version, "Latest_stable_version", nil)
 }
 
 // UpdateLatestUnstableVersionPages updates the Latest_unstable_version page and its subpages.
 // Gated: only updates when the Latest_unstable_version page already exists.
 func (c *MediaWikiClient) UpdateLatestUnstableVersionPages(version apiclient.Package) error {
+	return c.updateLatestPages(version, "Latest_unstable_version", nil)
+}
+
+func (c *MediaWikiClient) updateLatestPages(version apiclient.Package, versionPath string, existingTitles map[string]struct{}) error {
 	pkg := PackageName(version)
-	title := fmt.Sprintf("Template:VPM/%s/Latest_unstable_version", pkg)
-	// gate: only update if main page already exists
-	exists, err := c.pageExists(title)
-	if err != nil {
-		return fmt.Errorf("check existence for %s: %w", title, err)
-	}
-	if !exists {
-		return nil
+	title := fmt.Sprintf("Template:VPM/%s/%s", pkg, versionPath)
+	if existingTitles != nil {
+		if !hasWikiTitle(existingTitles, title) {
+			return nil
+		}
+	} else {
+		exists, err := c.pageExists(title)
+		if err != nil {
+			return fmt.Errorf("check existence for %s: %w", title, err)
+		}
+		if !exists {
+			return nil
+		}
 	}
 	if err := c.EditPage(title, sanitizeForWiki(PackageVersion(version)), true); err != nil {
-		return fmt.Errorf("update latest unstable version page: %w", err)
+		return fmt.Errorf("update %s page: %w", versionPath, err)
 	}
-	return c.updateVersionSubpages(pkg, "Latest_unstable_version", version)
+	return c.updateVersionSubpages(pkg, versionPath, version, existingTitles)
 }
 
 // ScanVpmPages scans the wiki for all Template:VPM/* pages and returns
@@ -883,80 +886,4 @@ func (c *MediaWikiClient) ScanVpmPages() (map[string][]string, map[string][]stri
 		}
 	}
 	return packagePages, wikiVersions, nil
-}
-
-// SyncExistingPages updates only those pages whose main pages already exist on the wiki.
-// It mirrors the legacy behavior: Latest_*, Latest_* subpages, and specific version subpages
-// are updated only when their corresponding main page exists.
-func (c *MediaWikiClient) SyncExistingPages(
-	latest map[string]apiclient.Package,
-	stable map[string]apiclient.Package,
-	unstable map[string]apiclient.Package,
-	allByPkg map[string]map[string]apiclient.Package,
-) error {
-	packagePages, wikiVersionsMap, err := c.ScanVpmPages()
-	if err != nil {
-		return err
-	}
-	// union of package names
-	nameSet := make(map[string]struct{})
-	for n := range packagePages {
-		nameSet[n] = struct{}{}
-	}
-	for n := range latest {
-		nameSet[n] = struct{}{}
-	}
-	for n := range stable {
-		nameSet[n] = struct{}{}
-	}
-	for n := range unstable {
-		nameSet[n] = struct{}{}
-	}
-	var errs []string
-	for name := range nameSet {
-		pages := packagePages[name]
-		has := func(title string) bool {
-			return slices.Contains(pages, title)
-		}
-		// Latest version
-		if v, ok := latest[name]; ok {
-			title := fmt.Sprintf("Template:VPM/%s/Latest_version", name)
-			if has(title) {
-				if err := c.UpdateLatestVersionPages(v); err != nil {
-					errs = append(errs, fmt.Sprintf("latest %s: %v", name, err))
-				}
-			}
-		}
-		// Latest stable
-		if v, ok := stable[name]; ok {
-			title := fmt.Sprintf("Template:VPM/%s/Latest_stable_version", name)
-			if has(title) {
-				if err := c.UpdateLatestStableVersionPages(v); err != nil {
-					errs = append(errs, fmt.Sprintf("stable %s: %v", name, err))
-				}
-			}
-		}
-		// Latest unstable
-		if v, ok := unstable[name]; ok {
-			title := fmt.Sprintf("Template:VPM/%s/Latest_unstable_version", name)
-			if has(title) {
-				if err := c.UpdateLatestUnstableVersionPages(v); err != nil {
-					errs = append(errs, fmt.Sprintf("unstable %s: %v", name, err))
-				}
-			}
-		}
-		// Specific version pages discovered on the wiki
-		known := allByPkg[name]
-		if versions, ok := wikiVersionsMap[name]; ok && len(versions) > 0 && known != nil {
-			for _, tag := range versions {
-				if err := c.ProcessSpecificVersionPage(name, tag, known); err != nil {
-					errs = append(errs, fmt.Sprintf("version %s/%s: %v", name, tag, err))
-				}
-			}
-		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("sync existing pages: %d errors:\n%s", len(errs), strings.Join(errs, "\n"))
-	}
-	return nil
 }

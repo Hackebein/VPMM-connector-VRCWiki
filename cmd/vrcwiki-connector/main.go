@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -18,10 +19,22 @@ import (
 	mw "github.com/hackebein/vpmm/apps/vrcwiki-connector/pkg/mediawiki"
 )
 
+const (
+	incrementalSyncDelay       = 30 * time.Second
+	summaryRefreshInterval     = 6 * time.Hour
+	initialSummaryRefreshDelay = 30 * time.Second
+)
+
 // minimal SSE event
 type sseEvent struct {
 	Event string
 	Data  string
+}
+
+type wikiCache struct {
+	packagePages map[string][]string
+	wikiVersions map[string][]string
+	titles       map[string]struct{}
 }
 
 func main() {
@@ -53,28 +66,18 @@ func main() {
 		logger.Fatalf("init wiki client: %v", err)
 	}
 
-	// debouncer for full syncs
-	syncDelay := 30 * time.Second
-	syncTimer := time.NewTimer(syncDelay)
-	// initial sync after delay
-	resetTimer := func() {
-		if !syncTimer.Stop() {
-			select {
-			case <-syncTimer.C:
-			default:
-			}
-		}
-		syncTimer.Reset(syncDelay)
-	}
-	resetTimer()
+	incrTimer := time.NewTimer(incrementalSyncDelay)
+	stopTimer(incrTimer)
 
-	// initialize generated API client
+	summaryTimer := time.NewTimer(initialSummaryRefreshDelay)
+	defer incrTimer.Stop()
+	defer summaryTimer.Stop()
+
 	cli, err := apiclient.NewClientWithResponses(vpmmBaseURL, apiclient.WithHTTPClient(httpClient))
 	if err != nil {
 		logger.Fatalf("init api client: %v", err)
 	}
 
-	// SSE loop with backoff
 	events := make(chan sseEvent, 8)
 	var lastID string
 	go func() {
@@ -102,12 +105,13 @@ func main() {
 				}
 				continue
 			}
-			// normal end or server close, short pause then reconnect
 			time.Sleep(1 * time.Second)
 		}
 	}()
 
-	// main loop: debounce triggers
+	pending := map[string]struct{}{}
+	var cache wikiCache
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -115,124 +119,173 @@ func main() {
 			return
 		case ev, ok := <-events:
 			if !ok {
-				// channel closed; terminate gracefully allowing any pending sync
 				continue
 			}
-			switch ev.Event {
-			case "package.added", "package.updated", "package.removed":
-				resetTimer()
+			if queuePackageEvent(pending, ev) {
+				resetTimer(incrTimer, incrementalSyncDelay)
 			}
-		case <-syncTimer.C:
-			// execute full sync
-			logger.Println("running wiki full sync")
-			runFullSync(ctx, cli, wikiClient, logger)
+		case <-incrTimer.C:
+			names := takePending(pending)
+			if len(names) == 0 {
+				continue
+			}
+			logger.Printf("running wiki incremental sync: packages=%d", len(names))
+			runIncrementalSync(ctx, cli, wikiClient, logger, names, &cache)
+		case <-summaryTimer.C:
+			logger.Println("running wiki summary refresh")
+			cache = runSummaryRefresh(ctx, cli, wikiClient, logger, cache)
+			summaryTimer.Reset(summaryRefreshInterval)
 		}
 	}
 }
 
-// runFullSync orchestrates a complete wiki sync using the new client helpers.
-func runFullSync(ctx context.Context, cli *apiclient.ClientWithResponses, wikiClient *mw.MediaWikiClient, logger *log.Logger) {
-	resp, err := cli.GetIndexWithResponse(ctx, nil)
-	if err != nil {
-		logger.Printf("full sync: get index: %v", err)
+func stopTimer(t *time.Timer) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+}
+
+func resetTimer(t *time.Timer, d time.Duration) {
+	stopTimer(t)
+	t.Reset(d)
+}
+
+func queuePackageEvent(pending map[string]struct{}, ev sseEvent) bool {
+	switch ev.Event {
+	case "package.added", "package.updated", "package.removed":
+		name := strings.TrimSpace(ev.Data)
+		if name == "" {
+			return false
+		}
+		pending[name] = struct{}{}
+		return true
+	default:
+		return false
+	}
+}
+
+func takePending(pending map[string]struct{}) []string {
+	names := make([]string, 0, len(pending))
+	for name := range pending {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		delete(pending, name)
+	}
+	return names
+}
+
+func wikiPackagesOnCache(names []string, cache wikiCache) (onWiki []string, skipped int) {
+	for _, name := range names {
+		if _, ok := cache.packagePages[name]; ok {
+			onWiki = append(onWiki, name)
+			continue
+		}
+		skipped++
+	}
+	return onWiki, skipped
+}
+
+func logWikiStats(logger *log.Logger, kind string, extra string, delta mw.RequestStats) {
+	logger.Printf("wiki %s complete: %squeries=%d edits=%d skips=%d deletes=%d requests=%d",
+		kind, extra, delta.Queries, delta.Edits, delta.Skips, delta.Deletes, delta.Requests)
+}
+
+func runIncrementalSync(ctx context.Context, cli *apiclient.ClientWithResponses, wikiClient *mw.MediaWikiClient, logger *log.Logger, names []string, cache *wikiCache) {
+	if cache == nil {
+		logWikiStats(logger, "incremental sync", fmtExtra(len(names), 0, len(names)), mw.RequestStats{})
+		return
+	}
+	onWiki, skipped := wikiPackagesOnCache(names, *cache)
+	if len(onWiki) == 0 {
+		logWikiStats(logger, "incremental sync", fmtExtra(len(names), 0, skipped), mw.RequestStats{})
 		return
 	}
 
-	// OpenAPI currently does not describe the /index.json 200 payload shape, so the
-	// generated client exposes it as raw bytes.
-	if resp.StatusCode() != http.StatusOK {
-		// Prefer structured error payloads when available.
-		switch {
-		case resp.ApplicationproblemJSON401 != nil:
-			logger.Printf("full sync: get index: unauthorized: %s", safeErrDetail(resp.ApplicationproblemJSON401))
-		case resp.ApplicationproblemJSON422 != nil:
-			logger.Printf("full sync: get index: unprocessable: %s", safeErrDetail(resp.ApplicationproblemJSON422))
-		case resp.ApplicationproblemJSON500 != nil:
-			logger.Printf("full sync: get index: server error: %s", safeErrDetail(resp.ApplicationproblemJSON500))
-		default:
-			logger.Printf("full sync: get index: unexpected status: %s", resp.Status())
-		}
+	before := wikiClient.Stats()
+	pkgs, ok := loadIndex(ctx, cli, logger, "incremental sync")
+	if !ok {
 		return
 	}
+	allVersionsMap := mw.BuildAllVersionsMapFromAPI(pkgs)
+	latestMap, stableMap, unstableMap := mw.ComputeLatestStableUnstable(allVersionsMap)
+	if err := wikiClient.SyncNamedPackages(onWiki, latestMap, stableMap, unstableMap, allVersionsMap, cache.titles, cache.wikiVersions); err != nil {
+		logger.Printf("incremental sync: %v", err)
+	}
+	*cache = refreshTitlesAndSummary(wikiClient, logger, "incremental sync", pkgs, *cache)
+	logWikiStats(logger, "incremental sync", fmtExtra(len(names), len(onWiki), skipped), wikiClient.Stats().Sub(before))
+}
+
+func fmtExtra(queued, onWiki, skipped int) string {
+	return "queued=" + strconv.Itoa(queued) + " wiki_packages=" + strconv.Itoa(onWiki) + " skipped=" + strconv.Itoa(skipped) + " "
+}
+
+func runSummaryRefresh(ctx context.Context, cli *apiclient.ClientWithResponses, wikiClient *mw.MediaWikiClient, logger *log.Logger, prev wikiCache) wikiCache {
+	before := wikiClient.Stats()
+	pkgs, ok := loadIndex(ctx, cli, logger, "summary refresh")
+	if !ok {
+		return prev
+	}
+	cache := refreshTitlesAndSummary(wikiClient, logger, "summary refresh", pkgs, prev)
+	logWikiStats(logger, "summary refresh", "wiki_packages="+strconv.Itoa(len(cache.packagePages))+" ", wikiClient.Stats().Sub(before))
+	return cache
+}
+
+func refreshTitlesAndSummary(wikiClient *mw.MediaWikiClient, logger *log.Logger, logPrefix string, pkgs []apiclient.Package, prev wikiCache) wikiCache {
+	allVersionsMap := mw.BuildAllVersionsMapFromAPI(pkgs)
+	packagePages, wikiVersionsMap, err := wikiClient.ScanVpmPages()
+	if err != nil {
+		logger.Printf("%s: scan wiki: %v", logPrefix, err)
+		return prev
+	}
+	titles := mw.PageTitleSet(packagePages)
+	cache := wikiCache{packagePages: packagePages, wikiVersions: wikiVersionsMap, titles: titles}
+	table, err := mw.GenerateVersionSummaryWikiTableWithWikiVersions(wikiVersionsMap, allVersionsMap)
+	if err != nil {
+		logger.Printf("%s: generate version table: %v", logPrefix, err)
+		return cache
+	}
+	if err := wikiClient.EditPage(mw.VersionSummaryPageTitle, table, true); err != nil {
+		logger.Printf("%s: update version summary page: %v", logPrefix, err)
+	}
+	return cache
+}
+
+func loadIndex(ctx context.Context, cli *apiclient.ClientWithResponses, logger *log.Logger, logPrefix string) ([]apiclient.Package, bool) {
+	resp, err := cli.GetIndexWithResponse(ctx, nil)
+	if err != nil {
+		logger.Printf("%s: get index: %v", logPrefix, err)
+		return nil, false
+	}
+
+	if resp.StatusCode() != http.StatusOK {
+		switch {
+		case resp.ApplicationproblemJSON401 != nil:
+			logger.Printf("%s: get index: unauthorized: %s", logPrefix, safeErrDetail(resp.ApplicationproblemJSON401))
+		case resp.ApplicationproblemJSON422 != nil:
+			logger.Printf("%s: get index: unprocessable: %s", logPrefix, safeErrDetail(resp.ApplicationproblemJSON422))
+		case resp.ApplicationproblemJSON500 != nil:
+			logger.Printf("%s: get index: server error: %s", logPrefix, safeErrDetail(resp.ApplicationproblemJSON500))
+		default:
+			logger.Printf("%s: get index: unexpected status: %s", logPrefix, resp.Status())
+		}
+		return nil, false
+	}
 	if len(resp.Body) == 0 {
-		logger.Printf("full sync: get index: empty response body")
-		return
+		logger.Printf("%s: get index: empty response body", logPrefix)
+		return nil, false
 	}
 
 	var idx vccIndex
 	if err := json.Unmarshal(resp.Body, &idx); err != nil {
-		logger.Printf("full sync: get index: decode json: %v", err)
-		return
+		logger.Printf("%s: get index: decode json: %v", logPrefix, err)
+		return nil, false
 	}
-
-	pkgs := flattenIndexPackages(&idx)
-
-	// Build versions map and compute latest/stable/unstable
-	allVersionsMap := mw.BuildAllVersionsMapFromAPI(pkgs)
-	latestMap, stableMap, unstableMap := mw.ComputeLatestStableUnstable(allVersionsMap)
-
-	// Scan wiki
-	packagePages, wikiVersionsMap, err := wikiClient.ScanVpmPages()
-	if err != nil {
-		logger.Printf("full sync: scan wiki: %v", err)
-		// continue with what we have
-		packagePages = map[string][]string{}
-		wikiVersionsMap = map[string][]string{}
-	}
-
-	// Union of package names from API and wiki
-	nameSet := make(map[string]struct{})
-	for name := range allVersionsMap {
-		nameSet[name] = struct{}{}
-	}
-	for name := range packagePages {
-		nameSet[name] = struct{}{}
-	}
-
-	// For each package, update latest/stable/unstable and specific versions
-	for name := range nameSet {
-		if v, ok := latestMap[name]; ok {
-			if err := wikiClient.UpdateLatestVersionPages(v); err != nil {
-				logger.Printf("full sync: update latest for %s: %v", name, err)
-			}
-		}
-		if v, ok := stableMap[name]; ok {
-			if err := wikiClient.UpdateLatestStableVersionPages(v); err != nil {
-				logger.Printf("full sync: update latest stable for %s: %v", name, err)
-			}
-		}
-		if v, ok := unstableMap[name]; ok {
-			if err := wikiClient.UpdateLatestUnstableVersionPages(v); err != nil {
-				logger.Printf("full sync: update latest unstable for %s: %v", name, err)
-			}
-		}
-
-		// known versions for this package
-		known := make(map[string]apiclient.Package)
-		if vs, ok := allVersionsMap[name]; ok {
-			for _, pv := range vs {
-				known[mw.PackageVersion(pv)] = pv
-			}
-		}
-		// process version pages detected on wiki
-		if versions, ok := wikiVersionsMap[name]; ok {
-			for _, tag := range versions {
-				if err := wikiClient.ProcessSpecificVersionPage(name, tag, known); err != nil {
-					logger.Printf("full sync: process version %s/%s: %v", name, tag, err)
-				}
-			}
-		}
-	}
-
-	// Generate and write the version summary table
-	table, err := mw.GenerateVersionSummaryWikiTableWithWikiVersions(wikiVersionsMap, allVersionsMap)
-	if err != nil {
-		logger.Printf("full sync: generate version table: %v", err)
-		return
-	}
-	if err := wikiClient.EditPage("Template:VPM/Version summary", table, true); err != nil {
-		logger.Printf("full sync: update version summary page: %v", err)
-	}
+	return flattenIndexPackages(&idx), true
 }
 
 // vccIndex is the structure of `/index.json` (VPM/VCC spec listing).
@@ -252,7 +305,6 @@ func flattenIndexPackages(idx *vccIndex) []apiclient.Package {
 		return nil
 	}
 
-	// stable iteration order for determinism
 	names := make([]string, 0, len(idx.Packages))
 	for name := range idx.Packages {
 		names = append(names, name)
@@ -276,8 +328,6 @@ func flattenIndexPackages(idx *vccIndex) []apiclient.Package {
 	return out
 }
 
-// sortPackagesByVersionDesc sorts packages in-place by semantic version
-// descending, falling back to string comparison when parsing fails.
 func sortPackagesByVersionDesc(pkgs []apiclient.Package) {
 	sort.SliceStable(pkgs, func(i, j int) bool {
 		left := strings.TrimSpace(mw.PackageVersion(pkgs[i]))
