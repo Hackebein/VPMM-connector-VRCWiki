@@ -167,6 +167,8 @@ func shortFieldName(field string) string {
 	switch strings.ToLower(strings.TrimSpace(field)) {
 	case "description":
 		return "description"
+	case "documentation":
+		return "documentation"
 	case "displayname":
 		return "display-name"
 	case "license":
@@ -231,6 +233,9 @@ func buildEditSummary(title, newText string) string {
 func (c *MediaWikiClient) UpdateSinglePackage(pkg apiclient.Package) error {
 	name := PackageName(pkg)
 	updated := 0
+	if err := c.syncDocumentationURL(name, "Latest_version", pkg.VPMPackage.DocumentationUrl, nil); err != nil {
+		return err
+	}
 	// helpers for optional fields
 	str := func(p *string) string {
 		if p == nil {
@@ -766,6 +771,9 @@ func (c *MediaWikiClient) updateVersionSubpages(PackageName, versionPath string,
 	if err := c.EditPage(licTitle, sanitizeForWiki(str(packageLicensePtr(version))), true); err != nil {
 		return fmt.Errorf("update license page: %w", err)
 	}
+	if err := c.syncDocumentationURL(PackageName, versionPath, version.VPMPackage.DocumentationUrl, existingTitles); err != nil {
+		return err
+	}
 
 	// Authors handling
 	authorName := ""
@@ -804,6 +812,39 @@ func (c *MediaWikiClient) updateVersionSubpages(PackageName, versionPath string,
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func (c *MediaWikiClient) syncDocumentationURL(packageName, versionPath string, rawURL *string, existingTitles map[string]struct{}) error {
+	title := fmt.Sprintf("Template:VPM/%s/%s/Documentation", packageName, versionPath)
+	link := ""
+	if rawURL != nil {
+		candidate := strings.TrimSpace(*rawURL)
+		parsed, err := url.Parse(candidate)
+		// The value is transcluded as the target of a wikitext external link.
+		if err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") &&
+			parsed.Hostname() != "" && parsed.User == nil &&
+			!strings.ContainsAny(candidate, " \t\r\n[]{}|<>") {
+			link = candidate
+		}
+	}
+	if link == "" {
+		if existingTitles != nil && !hasWikiTitle(existingTitles, title) {
+			return nil
+		}
+		if existingTitles == nil {
+			exists, err := c.pageExists(title)
+			if err != nil {
+				return fmt.Errorf("check documentation page: %w", err)
+			}
+			if !exists {
+				return nil
+			}
+		}
+	}
+	if err := c.EditPage(title, link, true); err != nil {
+		return fmt.Errorf("update documentation page: %w", err)
 	}
 	return nil
 }

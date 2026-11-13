@@ -244,6 +244,41 @@ func catalog(onWiki apiclient.Package, extra int) (latest map[string]apiclient.P
 	return latest, all
 }
 
+func TestSyncPackageDocumentation(t *testing.T) {
+	const name = "com.example.docs"
+	const version = "1.0.0"
+	const title = "Template:VPM/" + name + "/Latest_version/Documentation"
+	const docs = "https://docs.example.org/guide?version=1&lang=en#setup"
+	pages := latestTree(name, version, "Docs", "Example package", "MIT", "Ada")
+	transport := newWikiTransport(pages)
+	client := newTestWikiClient(t, transport)
+
+	sync := func(entry IndexPackageVersion) {
+		t.Helper()
+		pkg := PackageFromIndexVersion(name, entry)
+		if err := client.UpdateLatestVersionPages(pkg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entry := IndexPackageVersion{Version: version}
+	sync(entry)
+	if _, exists := transport.pages[title]; exists {
+		t.Fatal("missing documentation URL created a subpage")
+	}
+	docURL := docs
+	entry.DocumentationURL = &docURL
+	sync(entry)
+	if got := transport.pages[title]; got != docs {
+		t.Fatalf("documentation subpage = %q, want %q", got, docs)
+	}
+
+	entry.DocumentationURL = nil
+	sync(entry)
+	if got := transport.pages[title]; got != "" {
+		t.Fatalf("removed documentation URL is still on the Wiki: %q", got)
+	}
+}
+
 func TestSyncExistingPagesSkipsPackagesNotOnWiki(t *testing.T) {
 	on := testPackage("com.onwiki", "1.0.0", "On", "desc", "MIT", "Ada")
 	tr := newWikiTransport(latestTree("com.onwiki", "1.0.0", "On", "desc", "MIT", "Ada"))
