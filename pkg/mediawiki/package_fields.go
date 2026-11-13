@@ -47,9 +47,10 @@ func PackageFromIndexVersion(packageName string, v IndexPackageVersion) apiclien
 				Version:     version,
 				DisplayName: displayName,
 			},
-			Description: v.Description,
-			License:     v.License,
-			Author:      v.Author,
+			Description:      v.Description,
+			DocumentationUrl: v.DocumentationURL,
+			License:          v.License,
+			Author:           v.Author,
 		},
 	}
 }
